@@ -17,9 +17,10 @@ media/thumbnails/*
 !media/audio/.gitkeep
 !media/thumbnails/.gitkeep
 
-# IDE
+# IDE & Tools
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 
