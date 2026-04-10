@@ -1,5 +1,5 @@
 import { fetchMediaById } from "./api.js";
-import { formatTime, formatSize, $, toast, savePosition, getPosition } from "./utils.js";
+import { formatTime, formatSize, $, toast, savePosition, getPosition, addRecentlyPlayed } from "./utils.js";
 
 let mediaEl = null;
 let currentItem = null;
@@ -242,6 +242,12 @@ function bindMediaEvents(item) {
         }
     }, 5000);
 
+    // Speed control
+    initSpeedControl();
+
+    // Picture-in-Picture
+    initPiP();
+
     // Keyboard
     document.addEventListener("keydown", (e) => {
         if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
@@ -277,8 +283,100 @@ function bindMediaEvents(item) {
             case "KeyF":
                 if (mediaEl.requestFullscreen) mediaEl.requestFullscreen();
                 break;
+            case "BracketRight": // ] = speed up
+                cycleSpeed(1);
+                break;
+            case "BracketLeft": // [ = speed down
+                cycleSpeed(-1);
+                break;
+            case "KeyP":
+                if (e.shiftKey) togglePiP();
+                break;
         }
     });
+}
+
+// ========== SPEED CONTROL ==========
+const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+let currentSpeedIdx = 2; // 1x
+
+function initSpeedControl() {
+    const container = $(".speed-control");
+    if (!container || !mediaEl) return;
+
+    const btn = $(".speed-btn", container);
+    const menu = $(".speed-menu", container);
+    if (!btn || !menu) return;
+
+    btn.addEventListener("click", () => menu.classList.toggle("open"));
+
+    // Close on outside click
+    document.addEventListener("click", (e) => {
+        if (!container.contains(e.target)) menu.classList.remove("open");
+    });
+
+    // Render options
+    menu.innerHTML = SPEEDS.map((s, i) => `
+        <button class="speed-option${i === currentSpeedIdx ? " active" : ""}" data-idx="${i}">${s}x</button>
+    `).join("");
+
+    menu.querySelectorAll(".speed-option").forEach(opt => {
+        opt.addEventListener("click", () => {
+            currentSpeedIdx = parseInt(opt.dataset.idx);
+            setSpeed(SPEEDS[currentSpeedIdx]);
+            menu.classList.remove("open");
+            // Update active state
+            menu.querySelectorAll(".speed-option").forEach(o => o.classList.remove("active"));
+            opt.classList.add("active");
+        });
+    });
+}
+
+function setSpeed(speed) {
+    if (!mediaEl) return;
+    mediaEl.playbackRate = speed;
+    const btn = $(".speed-btn");
+    if (btn) {
+        btn.textContent = `${speed}x`;
+        btn.classList.toggle("highlight", speed !== 1);
+    }
+}
+
+function cycleSpeed(dir) {
+    currentSpeedIdx = Math.max(0, Math.min(SPEEDS.length - 1, currentSpeedIdx + dir));
+    setSpeed(SPEEDS[currentSpeedIdx]);
+    toast(`Speed: ${SPEEDS[currentSpeedIdx]}x`, "info");
+    // Update menu if open
+    const menu = $(".speed-menu");
+    if (menu) {
+        menu.querySelectorAll(".speed-option").forEach((o, i) => {
+            o.classList.toggle("active", i === currentSpeedIdx);
+        });
+    }
+}
+
+// ========== PICTURE-IN-PICTURE ==========
+function initPiP() {
+    const pipBtn = $(".pip-btn");
+    if (!pipBtn || !mediaEl) return;
+    if (!document.pictureInPictureEnabled || mediaEl.tagName !== "VIDEO") {
+        pipBtn.style.display = "none";
+        return;
+    }
+    pipBtn.addEventListener("click", togglePiP);
+}
+
+async function togglePiP() {
+    if (!mediaEl || mediaEl.tagName !== "VIDEO") return;
+    try {
+        if (document.pictureInPictureElement) {
+            await document.exitPictureInPicture();
+        } else {
+            await mediaEl.requestPictureInPicture();
+        }
+    } catch (e) {
+        toast("PiP not available", "error");
+    }
 }
 
 function updateDetails(item) {
@@ -302,6 +400,7 @@ export async function initPlayer(mediaId) {
     try {
         const item = await fetchMediaById(mediaId);
         document.title = `${item.title} — StreamBox`;
+        addRecentlyPlayed(mediaId);
         createMediaElement(item);
         updateDetails(item);
     } catch (err) {

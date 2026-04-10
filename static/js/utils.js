@@ -105,5 +105,73 @@ export function getPosition(mediaId) {
  * Check if a media item has a saved position
  */
 export function hasPosition(mediaId) {
-    return getPosition(mediaId) > 2; // Only show if more than 2 seconds in
+    return getPosition(mediaId) > 2;
+}
+
+// ========== FAVORITES ==========
+
+export function getFavorites() {
+    return JSON.parse(localStorage.getItem("streambox_favorites") || "[]");
+}
+
+export function isFavorite(mediaId) {
+    return getFavorites().includes(mediaId);
+}
+
+export function toggleFavorite(mediaId) {
+    const favs = getFavorites();
+    const idx = favs.indexOf(mediaId);
+    if (idx === -1) {
+        favs.push(mediaId);
+    } else {
+        favs.splice(idx, 1);
+    }
+    localStorage.setItem("streambox_favorites", JSON.stringify(favs));
+    return idx === -1; // returns true if added
+}
+
+// ========== RECENTLY PLAYED ==========
+
+export function addRecentlyPlayed(mediaId) {
+    let list = JSON.parse(localStorage.getItem("streambox_recent") || "[]");
+    list = list.filter(id => id !== mediaId);
+    list.unshift(mediaId);
+    if (list.length > 20) list = list.slice(0, 20);
+    localStorage.setItem("streambox_recent", JSON.stringify(list));
+}
+
+export function getRecentlyPlayed() {
+    return JSON.parse(localStorage.getItem("streambox_recent") || "[]");
+}
+
+// ========== THEME ==========
+
+const THEMES = {
+    red:    { accent: "#e94560", hover: "#ff6b81", glow: "rgba(233,69,96,0.2)",  soft: "rgba(233,69,96,0.08)" },
+    purple: { accent: "#7c6cf0", hover: "#9d8ff5", glow: "rgba(124,108,240,0.2)", soft: "rgba(124,108,240,0.08)" },
+    teal:   { accent: "#00d4c8", hover: "#33e0d6", glow: "rgba(0,212,200,0.2)",   soft: "rgba(0,212,200,0.08)" },
+    blue:   { accent: "#4a9eff", hover: "#6eb4ff", glow: "rgba(74,158,255,0.2)",  soft: "rgba(74,158,255,0.08)" },
+    green:  { accent: "#4cd964", hover: "#6ee380", glow: "rgba(76,217,100,0.2)",  soft: "rgba(76,217,100,0.08)" },
+    amber:  { accent: "#f0a030", hover: "#f5b85a", glow: "rgba(240,160,48,0.2)",  soft: "rgba(240,160,48,0.08)" },
+};
+
+export function getThemeNames() { return Object.keys(THEMES); }
+
+export function getCurrentTheme() {
+    return localStorage.getItem("streambox_theme") || "red";
+}
+
+export function applyTheme(name) {
+    const theme = THEMES[name];
+    if (!theme) return;
+    const root = document.documentElement;
+    root.style.setProperty("--accent", theme.accent);
+    root.style.setProperty("--accent-hover", theme.hover);
+    root.style.setProperty("--accent-glow", theme.glow);
+    root.style.setProperty("--accent-soft", theme.soft);
+    localStorage.setItem("streambox_theme", name);
+}
+
+export function initTheme() {
+    applyTheme(getCurrentTheme());
 }
