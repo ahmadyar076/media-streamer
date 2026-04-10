@@ -1,4 +1,4 @@
-// Dynamic Media Streamer — Entry Point
+// StreamBox — Entry Point
 
 const page = document.body.dataset.page || "home";
 
@@ -23,7 +23,40 @@ function initMobileMenu() {
     }
 }
 
+// === Keyboard shortcuts modal ===
+function initShortcutsModal() {
+    const modal = document.getElementById("shortcutsModal");
+    const openBtn = document.getElementById("shortcutsBtn");
+    const closeBtn = document.getElementById("closeShortcuts");
+
+    if (!modal) return;
+
+    const toggle = (show) => {
+        modal.classList.toggle("active", show);
+    };
+
+    if (openBtn) openBtn.addEventListener("click", () => toggle(true));
+    if (closeBtn) closeBtn.addEventListener("click", () => toggle(false));
+
+    modal.addEventListener("click", (e) => {
+        if (e.target === modal) toggle(false);
+    });
+
+    // '?' key opens shortcuts
+    document.addEventListener("keydown", (e) => {
+        if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+        if (e.key === "?" || (e.shiftKey && e.code === "Slash")) {
+            e.preventDefault();
+            toggle(!modal.classList.contains("active"));
+        }
+        if (e.code === "Escape" && modal.classList.contains("active")) {
+            toggle(false);
+        }
+    });
+}
+
 initMobileMenu();
+initShortcutsModal();
 
 // === Page-specific initialization ===
 if (page === "home") {

@@ -4,6 +4,9 @@ import { formatTime, formatSize, $, toast, savePosition, getPosition } from "./u
 let mediaEl = null;
 let currentItem = null;
 let saveInterval = null;
+let audioCtx = null;
+let analyser = null;
+let animFrameId = null;
 
 function createMediaElement(item) {
     const stage = $(".player-stage");
@@ -13,18 +16,85 @@ function createMediaElement(item) {
 
     if (item.type === "video") {
         mediaEl = document.createElement("video");
+        // Hide audio visualizer for video
+        const viz = $("#audioVisualizer");
+        if (viz) viz.style.display = "none";
     } else {
         mediaEl = document.createElement("audio");
         mediaEl.style.width = "100%";
+        // Show audio visualizer
+        const viz = $("#audioVisualizer");
+        if (viz) viz.style.display = "block";
+        // Make stage smaller for audio
+        stage.style.aspectRatio = "auto";
+        stage.style.height = "80px";
+        stage.style.background = "var(--bg-card)";
+        stage.style.borderRadius = "var(--radius-md)";
     }
 
     mediaEl.src = item.stream_url;
     mediaEl.preload = "metadata";
     mediaEl.controls = false;
+    mediaEl.crossOrigin = "anonymous";
     stage.appendChild(mediaEl);
 
     currentItem = item;
     bindMediaEvents(item);
+
+    // Setup audio visualizer for audio files
+    if (item.type === "audio") {
+        setupVisualizer();
+    }
+}
+
+function setupVisualizer() {
+    const canvas = $("#visualizerCanvas");
+    if (!canvas || !mediaEl) return;
+
+    try {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 128;
+
+        const source = audioCtx.createMediaElementSource(mediaEl);
+        source.connect(analyser);
+        analyser.connect(audioCtx.destination);
+
+        const bufferLength = analyser.frequencyBinCount;
+        const dataArray = new Uint8Array(bufferLength);
+
+        const ctx = canvas.getContext("2d");
+
+        function draw() {
+            animFrameId = requestAnimationFrame(draw);
+
+            const w = canvas.width = canvas.offsetWidth * window.devicePixelRatio;
+            const h = canvas.height = canvas.offsetHeight * window.devicePixelRatio;
+            ctx.clearRect(0, 0, w, h);
+
+            analyser.getByteFrequencyData(dataArray);
+
+            const barWidth = w / bufferLength;
+            const accent = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+            const purple = getComputedStyle(document.documentElement).getPropertyValue("--purple").trim();
+
+            for (let i = 0; i < bufferLength; i++) {
+                const barHeight = (dataArray[i] / 255) * h * 0.9;
+                const x = i * barWidth;
+
+                const gradient = ctx.createLinearGradient(0, h, 0, h - barHeight);
+                gradient.addColorStop(0, accent);
+                gradient.addColorStop(1, purple);
+
+                ctx.fillStyle = gradient;
+                ctx.fillRect(x, h - barHeight, barWidth - 1, barHeight);
+            }
+        }
+
+        draw();
+    } catch (e) {
+        console.warn("[StreamBox] Audio visualizer not supported:", e);
+    }
 }
 
 function bindMediaEvents(item) {
@@ -36,18 +106,25 @@ function bindMediaEvents(item) {
     const iconPause = playBtn ? $(".icon-pause", playBtn) : null;
     const progressBar = $("#progressBar");
     const progressFill = $("#progressFill");
+    const progressBuffer = $("#progressBuffer");
     const timeCurrent = $(".time-current");
     const timeTotal = $(".time-total");
     const volumeSlider = $("#volumeSlider");
     const muteBtn = $("#muteBtn");
 
-    // Update track info in the bottom bar
+    // Update track info
     const trackTitle = $(".player-bar .track-title");
     const trackArtist = $(".player-bar .track-artist");
     if (trackTitle) trackTitle.textContent = item.title;
     if (trackArtist) trackArtist.textContent = item.type.charAt(0).toUpperCase() + item.type.slice(1);
 
-    // Restore volume from localStorage
+    // Sidebar now playing
+    const npSection = $("#sidebarNP");
+    const npTitle = $("#npTitle");
+    if (npSection) npSection.style.display = "block";
+    if (npTitle) npTitle.textContent = item.title;
+
+    // Restore volume
     const savedVolume = localStorage.getItem("streambox_volume");
     if (savedVolume !== null) {
         mediaEl.volume = parseFloat(savedVolume);
@@ -59,11 +136,8 @@ function bindMediaEvents(item) {
     // Play / Pause
     if (playBtn) {
         playBtn.addEventListener("click", () => {
-            if (mediaEl.paused) {
-                mediaEl.play();
-            } else {
-                mediaEl.pause();
-            }
+            if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+            mediaEl.paused ? mediaEl.play() : mediaEl.pause();
         });
     }
 
@@ -75,30 +149,19 @@ function bindMediaEvents(item) {
     mediaEl.addEventListener("pause", () => {
         if (iconPlay) iconPlay.style.display = "block";
         if (iconPause) iconPause.style.display = "none";
-        // Save position on pause
         if (currentItem && mediaEl.currentTime > 2) {
             savePosition(currentItem.id, mediaEl.currentTime);
         }
     });
 
-    // Buffering states
-    mediaEl.addEventListener("waiting", () => {
-        if (stage) stage.classList.add("buffering");
-    });
+    // Buffering
+    mediaEl.addEventListener("waiting", () => { if (stage) stage.classList.add("buffering"); });
+    mediaEl.addEventListener("canplay", () => { if (stage) stage.classList.remove("buffering"); });
+    mediaEl.addEventListener("playing", () => { if (stage) stage.classList.remove("buffering"); });
 
-    mediaEl.addEventListener("canplay", () => {
-        if (stage) stage.classList.remove("buffering");
-    });
-
-    mediaEl.addEventListener("playing", () => {
-        if (stage) stage.classList.remove("buffering");
-    });
-
-    // Time updates
+    // Time
     mediaEl.addEventListener("loadedmetadata", () => {
         if (timeTotal) timeTotal.textContent = formatTime(mediaEl.duration);
-
-        // Resume from saved position
         const savedTime = getPosition(item.id);
         if (savedTime > 2 && savedTime < mediaEl.duration - 5) {
             mediaEl.currentTime = savedTime;
@@ -109,8 +172,15 @@ function bindMediaEvents(item) {
     mediaEl.addEventListener("timeupdate", () => {
         if (timeCurrent) timeCurrent.textContent = formatTime(mediaEl.currentTime);
         if (progressFill && mediaEl.duration) {
-            const pct = (mediaEl.currentTime / mediaEl.duration) * 100;
-            progressFill.style.width = `${pct}%`;
+            progressFill.style.width = `${(mediaEl.currentTime / mediaEl.duration) * 100}%`;
+        }
+    });
+
+    // Buffer progress
+    mediaEl.addEventListener("progress", () => {
+        if (progressBuffer && mediaEl.buffered.length > 0 && mediaEl.duration) {
+            const bufferedEnd = mediaEl.buffered.end(mediaEl.buffered.length - 1);
+            progressBuffer.style.width = `${(bufferedEnd / mediaEl.duration) * 100}%`;
         }
     });
 
@@ -118,60 +188,39 @@ function bindMediaEvents(item) {
     mediaEl.addEventListener("ended", () => {
         if (iconPlay) iconPlay.style.display = "block";
         if (iconPause) iconPause.style.display = "none";
-        // Clear saved position on completion
-        if (currentItem) {
-            savePosition(currentItem.id, 0);
-        }
+        if (currentItem) savePosition(currentItem.id, 0);
     });
 
-    // Error handling
+    // Error
     mediaEl.addEventListener("error", () => {
         const err = mediaEl.error;
         let msg = "Playback error";
         if (err) {
             switch (err.code) {
                 case 1: msg = "Playback aborted"; break;
-                case 2: msg = "Network error during playback"; break;
-                case 3: msg = "Media decoding failed — format may not be supported"; break;
-                case 4: msg = "Media format not supported by this browser"; break;
+                case 2: msg = "Network error"; break;
+                case 3: msg = "Decoding failed — format may not be supported"; break;
+                case 4: msg = "Format not supported by this browser"; break;
             }
         }
         toast(msg, "error");
         if (stage) {
             stage.classList.remove("buffering");
-            stage.innerHTML = `
-                <div class="stage-placeholder">
-                    <svg viewBox="0 0 24 24" width="64" height="64"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-                    <p>${msg}</p>
-                </div>
-            `;
+            stage.innerHTML = `<div class="stage-placeholder"><svg viewBox="0 0 24 24" width="48" height="48"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg><p>${msg}</p></div>`;
         }
     });
 
-    // Click-to-seek on progress bar
+    // Progress bar seek (drag)
     if (progressBar) {
         let isDragging = false;
-
         const seek = (e) => {
             const rect = progressBar.getBoundingClientRect();
             const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-            if (mediaEl.duration) {
-                mediaEl.currentTime = pct * mediaEl.duration;
-            }
+            if (mediaEl.duration) mediaEl.currentTime = pct * mediaEl.duration;
         };
-
-        progressBar.addEventListener("mousedown", (e) => {
-            isDragging = true;
-            seek(e);
-        });
-
-        document.addEventListener("mousemove", (e) => {
-            if (isDragging) seek(e);
-        });
-
-        document.addEventListener("mouseup", () => {
-            isDragging = false;
-        });
+        progressBar.addEventListener("mousedown", (e) => { isDragging = true; seek(e); });
+        document.addEventListener("mousemove", (e) => { if (isDragging) seek(e); });
+        document.addEventListener("mouseup", () => { isDragging = false; });
     }
 
     // Volume
@@ -182,27 +231,24 @@ function bindMediaEvents(item) {
         });
     }
 
-    // Mute toggle
     if (muteBtn) {
-        muteBtn.addEventListener("click", () => {
-            mediaEl.muted = !mediaEl.muted;
-        });
+        muteBtn.addEventListener("click", () => { mediaEl.muted = !mediaEl.muted; });
     }
 
-    // Periodic position save (every 5 seconds during playback)
+    // Periodic save
     saveInterval = setInterval(() => {
         if (currentItem && mediaEl && !mediaEl.paused && mediaEl.currentTime > 2) {
             savePosition(currentItem.id, mediaEl.currentTime);
         }
     }, 5000);
 
-    // Keyboard shortcuts
+    // Keyboard
     document.addEventListener("keydown", (e) => {
         if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-
         switch (e.code) {
             case "Space":
                 e.preventDefault();
+                if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
                 mediaEl.paused ? mediaEl.play() : mediaEl.pause();
                 break;
             case "ArrowLeft":
@@ -255,6 +301,7 @@ function updateDetails(item) {
 export async function initPlayer(mediaId) {
     try {
         const item = await fetchMediaById(mediaId);
+        document.title = `${item.title} — StreamBox`;
         createMediaElement(item);
         updateDetails(item);
     } catch (err) {
@@ -262,12 +309,7 @@ export async function initPlayer(mediaId) {
         toast("Failed to load media", "error");
         const stage = $(".player-stage");
         if (stage) {
-            stage.innerHTML = `
-                <div class="stage-placeholder">
-                    <svg viewBox="0 0 24 24" width="64" height="64"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
-                    <p>Media not found</p>
-                </div>
-            `;
+            stage.innerHTML = `<div class="stage-placeholder"><svg viewBox="0 0 24 24" width="48" height="48"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg><p>Media not found</p></div>`;
         }
     }
 }
