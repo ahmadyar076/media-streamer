@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# Media files (user-specific content)
+media/video/*
+media/audio/*
+media/thumbnails/*
+!media/video/.gitkeep
+!media/audio/.gitkeep
+!media/thumbnails/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment
+.env
+*.log
