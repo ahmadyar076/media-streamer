@@ -1,5 +1,5 @@
 import { fetchMedia, refreshLibrary } from "./api.js";
-import { formatSize, formatTime, debounce, $, $$ } from "./utils.js";
+import { formatSize, formatTime, debounce, $, $$, toast, hasPosition } from "./utils.js";
 
 let currentType = "all";
 let currentQuery = "";
@@ -7,7 +7,7 @@ let currentQuery = "";
 function createCard(item) {
     const card = document.createElement("a");
     card.href = `/player/${item.id}`;
-    card.className = "media-card";
+    card.className = "media-card fade-in";
 
     const typeIcon =
         item.type === "video"
@@ -20,10 +20,16 @@ function createCard(item) {
         ? `<img src="${item.thumbnail_url}" alt="${item.title}" loading="lazy">`
         : typeIcon;
 
+    const resumeBadge = hasPosition(item.id) ? `<span class="card-resume">Resume</span>` : "";
+
     card.innerHTML = `
         <div class="card-thumb">
             ${thumbContent}
             ${durationStr ? `<span class="card-duration">${durationStr}</span>` : ""}
+            ${resumeBadge}
+            <div class="card-play-overlay">
+                <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+            </div>
         </div>
         <div class="card-info">
             <div class="card-title" title="${item.title}">${item.title}</div>
@@ -37,6 +43,15 @@ function createCard(item) {
     return card;
 }
 
+function showSpinner(grid) {
+    grid.innerHTML = `
+        <div class="spinner-overlay">
+            <div class="spinner"></div>
+            <span>Loading media...</span>
+        </div>
+    `;
+}
+
 async function loadLibrary() {
     const grid = $("#libraryGrid");
     const countEl = $("#mediaCount");
@@ -44,12 +59,12 @@ async function loadLibrary() {
 
     if (!grid) return;
 
-    // Show loading
-    grid.innerHTML = "";
-    if (emptyState) emptyState.style.display = "none";
+    showSpinner(grid);
 
     try {
         const items = await fetchMedia({ type: currentType, q: currentQuery });
+
+        grid.innerHTML = "";
 
         if (items.length === 0) {
             if (emptyState) {
@@ -60,6 +75,7 @@ async function loadLibrary() {
             return;
         }
 
+        if (emptyState) emptyState.style.display = "none";
         if (countEl) countEl.textContent = `${items.length} item${items.length !== 1 ? "s" : ""}`;
 
         const fragment = document.createDocumentFragment();
@@ -70,6 +86,7 @@ async function loadLibrary() {
     } catch (err) {
         console.error("[StreamBox] Failed to load library:", err);
         grid.innerHTML = `<div class="empty-state"><h3>Failed to load media</h3><p>${err.message}</p></div>`;
+        toast("Failed to load media library", "error");
     }
 }
 
@@ -104,15 +121,21 @@ function bindRefresh() {
     btn.addEventListener("click", async () => {
         btn.disabled = true;
         btn.style.opacity = "0.5";
+        // Spin animation
+        const svg = btn.querySelector("svg");
+        if (svg) svg.style.animation = "spin 0.8s linear infinite";
+
         try {
             const result = await refreshLibrary();
-            console.log(`[StreamBox] Refreshed: ${result.count} files`);
+            toast(`Library refreshed: ${result.count} file${result.count !== 1 ? "s" : ""} found`, "success");
             await loadLibrary();
         } catch (err) {
             console.error("[StreamBox] Refresh failed:", err);
+            toast("Failed to refresh library", "error");
         } finally {
             btn.disabled = false;
             btn.style.opacity = "1";
+            if (svg) svg.style.animation = "";
         }
     });
 }

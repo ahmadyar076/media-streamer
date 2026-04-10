@@ -1,14 +1,15 @@
 import { fetchMediaById } from "./api.js";
-import { formatTime, formatSize, $ } from "./utils.js";
+import { formatTime, formatSize, $, toast, savePosition, getPosition } from "./utils.js";
 
-let mediaEl = null; // <video> or <audio> element
+let mediaEl = null;
+let currentItem = null;
+let saveInterval = null;
 
 function createMediaElement(item) {
     const stage = $(".player-stage");
     if (!stage) return;
 
-    // Clear placeholder
-    stage.innerHTML = "";
+    stage.innerHTML = `<div class="buffering-spinner"></div>`;
 
     if (item.type === "video") {
         mediaEl = document.createElement("video");
@@ -22,12 +23,14 @@ function createMediaElement(item) {
     mediaEl.controls = false;
     stage.appendChild(mediaEl);
 
+    currentItem = item;
     bindMediaEvents(item);
 }
 
 function bindMediaEvents(item) {
     if (!mediaEl) return;
 
+    const stage = $(".player-stage");
     const playBtn = $("#playBtn");
     const iconPlay = playBtn ? $(".icon-play", playBtn) : null;
     const iconPause = playBtn ? $(".icon-pause", playBtn) : null;
@@ -44,8 +47,12 @@ function bindMediaEvents(item) {
     if (trackTitle) trackTitle.textContent = item.title;
     if (trackArtist) trackArtist.textContent = item.type.charAt(0).toUpperCase() + item.type.slice(1);
 
-    // Set initial volume
-    if (volumeSlider) {
+    // Restore volume from localStorage
+    const savedVolume = localStorage.getItem("streambox_volume");
+    if (savedVolume !== null) {
+        mediaEl.volume = parseFloat(savedVolume);
+        if (volumeSlider) volumeSlider.value = Math.round(mediaEl.volume * 100);
+    } else if (volumeSlider) {
         mediaEl.volume = volumeSlider.value / 100;
     }
 
@@ -68,11 +75,35 @@ function bindMediaEvents(item) {
     mediaEl.addEventListener("pause", () => {
         if (iconPlay) iconPlay.style.display = "block";
         if (iconPause) iconPause.style.display = "none";
+        // Save position on pause
+        if (currentItem && mediaEl.currentTime > 2) {
+            savePosition(currentItem.id, mediaEl.currentTime);
+        }
+    });
+
+    // Buffering states
+    mediaEl.addEventListener("waiting", () => {
+        if (stage) stage.classList.add("buffering");
+    });
+
+    mediaEl.addEventListener("canplay", () => {
+        if (stage) stage.classList.remove("buffering");
+    });
+
+    mediaEl.addEventListener("playing", () => {
+        if (stage) stage.classList.remove("buffering");
     });
 
     // Time updates
     mediaEl.addEventListener("loadedmetadata", () => {
         if (timeTotal) timeTotal.textContent = formatTime(mediaEl.duration);
+
+        // Resume from saved position
+        const savedTime = getPosition(item.id);
+        if (savedTime > 2 && savedTime < mediaEl.duration - 5) {
+            mediaEl.currentTime = savedTime;
+            toast(`Resuming from ${formatTime(savedTime)}`, "info");
+        }
     });
 
     mediaEl.addEventListener("timeupdate", () => {
@@ -83,14 +114,63 @@ function bindMediaEvents(item) {
         }
     });
 
+    // Ended
+    mediaEl.addEventListener("ended", () => {
+        if (iconPlay) iconPlay.style.display = "block";
+        if (iconPause) iconPause.style.display = "none";
+        // Clear saved position on completion
+        if (currentItem) {
+            savePosition(currentItem.id, 0);
+        }
+    });
+
+    // Error handling
+    mediaEl.addEventListener("error", () => {
+        const err = mediaEl.error;
+        let msg = "Playback error";
+        if (err) {
+            switch (err.code) {
+                case 1: msg = "Playback aborted"; break;
+                case 2: msg = "Network error during playback"; break;
+                case 3: msg = "Media decoding failed — format may not be supported"; break;
+                case 4: msg = "Media format not supported by this browser"; break;
+            }
+        }
+        toast(msg, "error");
+        if (stage) {
+            stage.classList.remove("buffering");
+            stage.innerHTML = `
+                <div class="stage-placeholder">
+                    <svg viewBox="0 0 24 24" width="64" height="64"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                    <p>${msg}</p>
+                </div>
+            `;
+        }
+    });
+
     // Click-to-seek on progress bar
     if (progressBar) {
-        progressBar.addEventListener("click", (e) => {
+        let isDragging = false;
+
+        const seek = (e) => {
             const rect = progressBar.getBoundingClientRect();
-            const pct = (e.clientX - rect.left) / rect.width;
+            const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
             if (mediaEl.duration) {
                 mediaEl.currentTime = pct * mediaEl.duration;
             }
+        };
+
+        progressBar.addEventListener("mousedown", (e) => {
+            isDragging = true;
+            seek(e);
+        });
+
+        document.addEventListener("mousemove", (e) => {
+            if (isDragging) seek(e);
+        });
+
+        document.addEventListener("mouseup", () => {
+            isDragging = false;
         });
     }
 
@@ -98,6 +178,7 @@ function bindMediaEvents(item) {
     if (volumeSlider) {
         volumeSlider.addEventListener("input", (e) => {
             mediaEl.volume = e.target.value / 100;
+            localStorage.setItem("streambox_volume", mediaEl.volume);
         });
     }
 
@@ -108,9 +189,15 @@ function bindMediaEvents(item) {
         });
     }
 
+    // Periodic position save (every 5 seconds during playback)
+    saveInterval = setInterval(() => {
+        if (currentItem && mediaEl && !mediaEl.paused && mediaEl.currentTime > 2) {
+            savePosition(currentItem.id, mediaEl.currentTime);
+        }
+    }, 5000);
+
     // Keyboard shortcuts
     document.addEventListener("keydown", (e) => {
-        // Don't hijack when typing in inputs
         if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
 
         switch (e.code) {
@@ -124,17 +211,19 @@ function bindMediaEvents(item) {
                 break;
             case "ArrowRight":
                 e.preventDefault();
-                mediaEl.currentTime = Math.min(mediaEl.duration, mediaEl.currentTime + 10);
+                mediaEl.currentTime = Math.min(mediaEl.duration || 0, mediaEl.currentTime + 10);
                 break;
             case "ArrowUp":
                 e.preventDefault();
                 mediaEl.volume = Math.min(1, mediaEl.volume + 0.05);
                 if (volumeSlider) volumeSlider.value = Math.round(mediaEl.volume * 100);
+                localStorage.setItem("streambox_volume", mediaEl.volume);
                 break;
             case "ArrowDown":
                 e.preventDefault();
                 mediaEl.volume = Math.max(0, mediaEl.volume - 0.05);
                 if (volumeSlider) volumeSlider.value = Math.round(mediaEl.volume * 100);
+                localStorage.setItem("streambox_volume", mediaEl.volume);
                 break;
             case "KeyM":
                 mediaEl.muted = !mediaEl.muted;
@@ -154,17 +243,13 @@ function updateDetails(item) {
 
     if (title) title.textContent = item.title;
 
-    // Build type string with codec and resolution
     let typeStr = item.type.charAt(0).toUpperCase() + item.type.slice(1) + ` (${item.extension})`;
     if (item.codec) typeStr += ` — ${item.codec}`;
     if (item.width && item.height) typeStr += ` ${item.width}x${item.height}`;
     if (type) type.textContent = typeStr;
 
     if (size) size.textContent = formatSize(item.size);
-
-    if (duration) {
-        duration.textContent = item.duration ? formatTime(item.duration) : "--";
-    }
+    if (duration) duration.textContent = item.duration ? formatTime(item.duration) : "--";
 }
 
 export async function initPlayer(mediaId) {
@@ -174,9 +259,15 @@ export async function initPlayer(mediaId) {
         updateDetails(item);
     } catch (err) {
         console.error("[StreamBox] Failed to load media:", err);
+        toast("Failed to load media", "error");
         const stage = $(".player-stage");
         if (stage) {
-            stage.innerHTML = `<div class="stage-placeholder"><h3>Media not found</h3><p>${err.message}</p></div>`;
+            stage.innerHTML = `
+                <div class="stage-placeholder">
+                    <svg viewBox="0 0 24 24" width="64" height="64"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+                    <p>Media not found</p>
+                </div>
+            `;
         }
     }
 }

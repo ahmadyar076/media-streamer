@@ -1,5 +1,5 @@
 import { fetchMedia } from "./api.js";
-import { formatSize, formatTime, $ } from "./utils.js";
+import { formatSize, formatTime, $, hasPosition } from "./utils.js";
 
 export async function initHome() {
     const grid = $("#recentGrid");
@@ -17,7 +17,7 @@ export async function initHome() {
         for (const item of recent) {
             const card = document.createElement("a");
             card.href = `/player/${item.id}`;
-            card.className = "media-card";
+            card.className = "media-card fade-in";
 
             const typeIcon =
                 item.type === "video"
@@ -29,10 +29,16 @@ export async function initHome() {
                 ? `<img src="${item.thumbnail_url}" alt="${item.title}" loading="lazy">`
                 : typeIcon;
 
+            const resumeBadge = hasPosition(item.id) ? `<span class="card-resume">Resume</span>` : "";
+
             card.innerHTML = `
                 <div class="card-thumb">
                     ${thumbContent}
                     ${durationStr ? `<span class="card-duration">${durationStr}</span>` : ""}
+                    ${resumeBadge}
+                    <div class="card-play-overlay">
+                        <svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    </div>
                 </div>
                 <div class="card-info">
                     <div class="card-title" title="${item.title}">${item.title}</div>
